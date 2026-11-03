@@ -23,6 +23,10 @@ on:
         required: false
         default: ""
         type: string
+      tweak_run_id:
+        required: false
+        default: ""
+        type: string
       is_testflight:
         default: false
         description: "TestFlight build"
@@ -38,6 +42,10 @@ on:
         default: false
         type: boolean
       ipa_sha256:
+        required: false
+        default: ""
+        type: string
+      tweak_run_id:
         required: false
         default: ""
         type: string
@@ -63,6 +71,7 @@ env:
 
 jobs:
   build-tweak:
+    if: inputs.tweak_run_id == ''
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -129,18 +138,46 @@ jobs:
           if-no-files-found: error
 
   build-ipa:
-    if: inputs.caller_workflow != 'ci' && inputs.ipa_url != ''
+    if: >-
+      !cancelled() && inputs.caller_workflow != 'ci' && inputs.ipa_url != '' &&
+      (needs.build-tweak.result == 'success' ||
+       (needs.build-tweak.result == 'skipped' && inputs.tweak_run_id != ''))
     runs-on: macos-15
     needs: build-tweak
+    permissions:
+      contents: read
+      actions: read
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify reused tweak source
+        if: inputs.tweak_run_id != ''
+        env:
+          TWEAK_RUN_ID: ${{ inputs.tweak_run_id }}
+        run: |
+          SOURCE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TWEAK_RUN_ID" --jq .head_sha)
+          RESULT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TWEAK_RUN_ID/jobs" --jq '.jobs[] | select(.name == "build-tweak") | .conclusion')
+          test "$RESULT" = success
+          git diff --exit-code "$SOURCE_SHA" "$GITHUB_SHA" -- \
+            ios core bundle gradle build.gradle.kts settings.gradle.kts gradle.properties
 
       - name: Download build artifacts
+        if: inputs.tweak_run_id == ''
         uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
+          name: rootless package
+
+      - name: Download verified existing tweak
+        if: inputs.tweak_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: rootless package
+          run-id: ${{ inputs.tweak_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download Discord IPA
         env:
@@ -180,7 +217,12 @@ jobs:
 
       - name: Inject Valenced
         run: |
-          cyan -g --overwrite -i discord.ipa -o "${{ env.APP_NAME }}.ipa" -f "${{ env.ROOTLESS_DEB_FILE_NAME }}"
+          # cyan's IPA writer excludes all hidden paths, including Discord's
+          # assets/.cache translations. Archive its app output without exclusions.
+          mkdir -p injected/Payload
+          cyan -g --overwrite -i discord.ipa -o injected/Payload/Discord.app -f "${{ env.ROOTLESS_DEB_FILE_NAME }}"
+          cd injected
+          zip -qr "$GITHUB_WORKSPACE/${{ env.APP_NAME }}.ipa" Payload
 
       - name: Verify injection and original Discord files
         run: |
