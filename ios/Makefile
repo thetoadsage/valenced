@@ -22,10 +22,9 @@ ValencedTweak_LDFLAGS = -undefined dynamic_lookup -lz
 ifneq ($(VALENCED_CORE_LIB),)
 ValencedTweak_LDFLAGS += -Wl,-force_load,$(VALENCED_CORE_LIB)
 else
-ValencedTweak_FRAMEWORKS += ValencedCore
-ValencedTweak_CFLAGS += -F$(VALENCED_CORE_FW)
-ValencedTweak_CCFLAGS += -F$(VALENCED_CORE_FW)
-ValencedTweak_LDFLAGS += -F$(VALENCED_CORE_FW) -Wl,-force_load,$(VALENCED_CORE_FW)/ValencedCore
+# Kotlin emits a static framework. Link its archive directly; -framework would
+# need a parent search path and would link the same archive a second time.
+ValencedTweak_LDFLAGS += -Wl,-force_load,$(VALENCED_CORE_FW)/ValencedCore
 endif
 
 include $(THEOS_MAKE_PATH)/tweak.mk
