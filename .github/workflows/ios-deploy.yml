@@ -13,6 +13,16 @@ on:
         description: "Release the build"
         required: true
         type: boolean
+      ipa_encrypted:
+        description: "Input is AES-256-CBC encrypted with IPA_PASSPHRASE"
+        required: false
+        default: false
+        type: boolean
+      ipa_sha256:
+        description: "Expected SHA-256 of the decrypted input IPA"
+        required: false
+        default: ""
+        type: string
       is_testflight:
         default: false
         description: "TestFlight build"
@@ -22,6 +32,14 @@ on:
     inputs:
       ipa_url:
         required: true
+        type: string
+      ipa_encrypted:
+        required: false
+        default: false
+        type: boolean
+      ipa_sha256:
+        required: false
+        default: ""
         type: string
       is_testflight:
         required: true
@@ -33,6 +51,9 @@ on:
       caller_workflow:
         required: false
         type: string
+    secrets:
+      IPA_PASSPHRASE:
+        required: false
 
 permissions:
   contents: read
@@ -114,8 +135,23 @@ jobs:
       - name: Download Discord IPA
         env:
           IPA_URL: ${{ inputs.ipa_url }}
+          IPA_ENCRYPTED: ${{ inputs.ipa_encrypted }}
+          IPA_PASSPHRASE: ${{ secrets.IPA_PASSPHRASE }}
+          IPA_SHA256: ${{ inputs.ipa_sha256 }}
         run: |
-          curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output discord.ipa "$IPA_URL"
+          curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output discord.download "$IPA_URL"
+          if [[ "$IPA_ENCRYPTED" == "true" ]]; then
+            test -n "$IPA_PASSPHRASE"
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+              -pass env:IPA_PASSPHRASE -in discord.download -out discord.ipa
+            rm discord.download
+          else
+            mv discord.download discord.ipa
+          fi
+          if [[ -n "$IPA_SHA256" ]]; then
+            printf '%s  discord.ipa\n' "$IPA_SHA256" | shasum -a 256 -c -
+          fi
+          python3 scripts/verify-ios.py discord.ipa --report input-report.json
 
       - name: Extract Values
         run: |
@@ -136,11 +172,19 @@ jobs:
         run: |
           cyan -g --overwrite -i discord.ipa -o "${{ env.APP_NAME }}.ipa" -f "${{ env.ROOTLESS_DEB_FILE_NAME }}"
 
+      - name: Verify injection and original Discord files
+        run: |
+          python3 scripts/verify-ios.py discord.ipa --output "${{ env.APP_NAME }}.ipa" --report verification.json
+          shasum -a 256 "${{ env.APP_NAME }}.ipa" > SHA256SUMS
+
       - name: Upload ipa as artifact
         uses: actions/upload-artifact@v4
         with:
           name: ipa
-          path: ${{ env.APP_NAME }}.ipa
+          path: |
+            ${{ env.APP_NAME }}.ipa
+            verification.json
+            SHA256SUMS
           if-no-files-found: error
 
   release-app:
@@ -200,25 +244,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update apt repo
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.WORKFLOW_DISPATCH_TOKEN }}
-          script: |
-            const assets = JSON.parse('${{ steps.create_release.outputs.assets }}');
-            const debAsset = assets.find(asset => asset.name === '${{ env.ROOTLESS_DEB_FILE_NAME }}');
-
-            if (!debAsset) {
-              core.setFailed('Could not find DEB asset in release');
-              return;
-            }
-
-            await github.rest.repos.createDispatchEvent({
-              owner: 'castdrian',
-              repo: 'apt-repo',
-              event_type: 'package-update',
-              client_payload: {
-                package_url: debAsset.browser_download_url,
-                package_name: '${{ env.ROOTLESS_DEB_FILE_NAME }}'
-              }
-            });
