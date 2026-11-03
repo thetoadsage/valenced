@@ -6,8 +6,8 @@ on:
     inputs:
       ipa_url:
         default: ""
-        description: "Direct link to the decrypted IPA"
-        required: true
+        description: "Direct HTTPS link to a clean decrypted Discord IPA; leave empty to build only the tweak"
+        required: false
         type: string
       release:
         description: "Release the build"
@@ -34,15 +34,16 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+
 env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
   build-tweak:
     runs-on: macos-15
-
-    env:
-      DEB_DOWNLOADED: false
+    timeout-minutes: 45
 
     steps:
       - name: Checkout code
@@ -50,41 +51,10 @@ jobs:
         with:
           submodules: true
 
-      - name: Download Tweak
-        if: inputs.caller_workflow != 'ci'
-        run: |
-          set +e
-
-          release_info=$(gh api --header 'Accept: application/vnd.github+json' repos/${{ github.repository }}/releases/latest)
-          status_code=$(echo $release_info | jq -r ".status")
-
-          if [ "$status_code" != "null" ]; then
-            echo "No releases found or request failed, status code: $status_code"
-            echo "DEB_DOWNLOADED=false" >> $GITHUB_ENV
-            exit 0
-          fi
-
-          set -e
-
-          release_version=$(echo "$release_info" | jq -r '.assets[] | select(.name | contains("iphoneos-arm64.deb")) | .name' | grep -o '_[0-9.]\+_' | tr -d '_')
-          control_version=$(grep '^Version:' ios/control | cut -d ' ' -f 2)
-
-          if [ "$release_version" = "$control_version" ]; then
-            echo "Versions match. Downloading DEB files..."
-            echo "$release_info" | jq -r '.assets[] | select(.name | endswith("arm64.deb")) | .browser_download_url' | xargs -I {} curl -L -O {}
-            echo "DEB_DOWNLOADED=true" >> $GITHUB_ENV
-          else
-            echo "Versions do not match. No files will be downloaded."
-            echo "DEB_DOWNLOADED=false" >> $GITHUB_ENV
-            exit 0
-          fi
-
       - name: Check cache
-        if: env.DEB_DOWNLOADED == 'false'
         run: echo upstream_heads=`git ls-remote https://github.com/theos/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/theos/sdks | head -n 1 | cut -f 1` >> $GITHUB_ENV
 
       - name: Use cache
-        if: env.DEB_DOWNLOADED == 'false'
         id: cache
         uses: actions/cache@v4
         with:
@@ -92,7 +62,6 @@ jobs:
           key: ${{ runner.os }}-${{ env.upstream_heads }}
 
       - name: Prepare Theos
-        if: env.DEB_DOWNLOADED == 'false'
         uses: Randomblock1/theos-action@v1
 
       - name: Set GNU Make path
@@ -100,15 +69,13 @@ jobs:
           echo "PATH=$(brew --prefix make)/libexec/gnubin:$PATH" >> $GITHUB_ENV
 
       - name: Setup Java
-        if: env.DEB_DOWNLOADED == 'false'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 25
           cache: gradle
 
       - name: Cache Kotlin/Native
-        if: env.DEB_DOWNLOADED == 'false'
         uses: actions/cache@v4
         with:
           path: ~/.konan
@@ -116,31 +83,22 @@ jobs:
           restore-keys: ${{ runner.os }}-konan-
 
       - name: Setup Deno
-        if: env.DEB_DOWNLOADED == 'false'
         uses: denoland/setup-deno@v2
         with:
           deno-version-file: bundle/.dvmrc
 
       - name: Build packages
-        if: env.DEB_DOWNLOADED == 'false'
         run: ./gradlew :ios:packageTweak
-
-      - name: Set DEB path
-        run: |
-          if [ "${{ env.DEB_DOWNLOADED }}" == "true" ]; then
-            echo "ROOTLESS_DEB_PATH=*-arm64.deb" >> $GITHUB_ENV
-          else
-            echo "ROOTLESS_DEB_PATH=ios/packages/*-arm64.deb" >> $GITHUB_ENV
-          fi
 
       - name: Upload rootless package
         uses: actions/upload-artifact@v4
         with:
           name: rootless package
-          path: ${{ env.ROOTLESS_DEB_PATH }}
+          path: ios/packages/*-arm64.deb
+          if-no-files-found: error
 
   build-ipa:
-    if: inputs.caller_workflow != 'ci'
+    if: inputs.caller_workflow != 'ci' && inputs.ipa_url != ''
     runs-on: macos-15
     needs: build-tweak
 
@@ -154,32 +112,10 @@ jobs:
           merge-multiple: true
 
       - name: Download Discord IPA
+        env:
+          IPA_URL: ${{ inputs.ipa_url }}
         run: |
-          curl -L -o discord.ipa ${{ github.event.inputs.ipa_url || inputs.ipa_url }}
-
-      - name: Clone OpenInDiscord
-        uses: actions/checkout@v4
-        with:
-          repository: castdrian/OpenInDiscord
-          path: OpenInDiscord
-
-      - name: Build Safari Extension
-        run: |
-          cd OpenInDiscord
-          xcodebuild build \
-            -target "OpenInDiscord Extension" \
-            -configuration Release \
-            -sdk iphoneos \
-            CONFIGURATION_BUILD_DIR="build" \
-            PRODUCT_NAME="OpenInDiscord" \
-            PRODUCT_BUNDLE_IDENTIFIER="com.hammerandchisel.discord.OpenInDiscord" \
-            PRODUCT_MODULE_NAME="OpenInDiscordExt" \
-            SKIP_INSTALL=NO \
-            DEVELOPMENT_TEAM="" \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=NO | xcbeautify
+          curl --fail --location --retry 3 --proto '=https' --proto-redir '=https' --output discord.ipa "$IPA_URL"
 
       - name: Extract Values
         run: |
@@ -191,17 +127,21 @@ jobs:
           echo "APP_NAME=$NAME" >> $GITHUB_ENV
 
       - name: Install cyan
-        run: pip install --force-reinstall https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip Pillow
-
-      - name: Inject tweak and extension
         run: |
-          cyan -uwsgq -i discord.ipa -o ${{ env.APP_NAME }}.ipa -f ${{ env.ROOTLESS_DEB_FILE_NAME }} OpenInDiscord/build/OpenInDiscord.appex
+          python3 -m venv "$RUNNER_TEMP/cyan"
+          "$RUNNER_TEMP/cyan/bin/pip" install https://github.com/asdfzxcvbn/pyzule-rw/archive/740d3716dcd98c20c000f12cdb88f1f0b2a533a4.zip
+          echo "$RUNNER_TEMP/cyan/bin" >> "$GITHUB_PATH"
+
+      - name: Inject Valenced
+        run: |
+          cyan -g --overwrite -i discord.ipa -o "${{ env.APP_NAME }}.ipa" -f "${{ env.ROOTLESS_DEB_FILE_NAME }}"
 
       - name: Upload ipa as artifact
         uses: actions/upload-artifact@v4
         with:
           name: ipa
           path: ${{ env.APP_NAME }}.ipa
+          if-no-files-found: error
 
   release-app:
     if: |
