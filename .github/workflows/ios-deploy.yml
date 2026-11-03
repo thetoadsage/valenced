@@ -111,6 +111,16 @@ jobs:
       - name: Build packages
         run: ./gradlew :ios:packageTweak
 
+      - name: Verify static Kotlin C bridge
+        run: |
+          python3 - <<'PYTHON'
+          import runpy
+          from pathlib import Path
+          checks = runpy.run_path('scripts/verify-ios.py')
+          tweak = Path('ios/.theos/obj/arm64/ValencedTweak.dylib')
+          print('Kotlin C exports:', checks['verify_core'](tweak.read_bytes()))
+          PYTHON
+
       - name: Upload rootless package
         uses: actions/upload-artifact@v4
         with:

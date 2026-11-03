@@ -113,6 +113,14 @@ def symbols(data, options):
         return set(subprocess.check_output(['nm', options, f.name], text=True).splitlines())
 
 
+def verify_core(data):
+    defined = symbols(data, '-gUj')
+    require('_ValencedCore_FreeString' in defined, 'Static Kotlin C API is missing')
+    unresolved = sorted(s for s in symbols(data, '-uj') if s.startswith('_ValencedCore_'))
+    require(not unresolved, 'Unresolved Kotlin C bridge functions: ' + repr(unresolved))
+    return len([s for s in defined if s.startswith('_ValencedCore_')])
+
+
 def verify(source, output):
     before, after = inspect(source), inspect(output)
     root = after['root']
@@ -136,8 +144,7 @@ def verify(source, output):
         require(hermes_version(dst.read(bundle)) == before['hermes_bytecode_version'],
                 'Valenced and Discord Hermes bytecode versions differ')
         # The Kotlin core is linked statically; its C bridge must be defined in the tweak.
-        defined = symbols(dst.read(tweak), '-gUj')
-        require('_ValencedCore_FreeString' in defined, 'Static Kotlin core is missing')
+        core_exports = verify_core(dst.read(tweak))
         undefined = symbols(dst.read(tweak), '-uj')
         jsi = {s for s in undefined if 'facebook3jsi' in s}
         require(jsi, 'Tweak has no JSI imports')
@@ -164,6 +171,7 @@ def verify(source, output):
             require(sha(src.read(name)) == sha(dst.read(target)), 'Original file changed: ' + relative)
             preserved += 1
         after['verification'] = {'on_device_tested': False, 'jsi_imports_resolved': len(jsi),
+                                 'kotlin_c_exports': core_exports,
                                  'original_files_preserved': preserved,
                                  'valenced_bundle_sha256': sha(dst.read(bundle)),
                                  'tweak_sha256': sha(dst.read(tweak)),

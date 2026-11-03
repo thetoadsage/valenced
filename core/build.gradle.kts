@@ -26,6 +26,11 @@ kotlin {
         val iosArm64 = iosArm64()
         iosSimulatorArm64()
 
+        // The tweak consumes @CName exports, which require the C library output.
+        iosArm64.binaries.staticLib {
+            baseName = "ValencedCore"
+        }
+
         iosArm64.binaries.framework {
             baseName = "ValencedCore"
             isStatic = true
