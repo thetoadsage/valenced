@@ -42,6 +42,7 @@ static NSArray *internalRepoPluginsJSPayload(void) {
             @"author": record.manifest.author,
             @"icon": record.manifest.icon ?: [NSNull null],
             @"channels": @{REPO_CHANNEL_LATEST: version},
+            @"order": @[version],
             @"versions": @{version: @{
                 @"url": [NSNull null],
                 @"sha256": [NSNull null],
@@ -174,6 +175,11 @@ extern "C" void RegisterRepoMethods(void) {
                     @"dependencies": deps,
                 };
             }
+            NSArray<NSString *> *order = [plugin.versions.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+                PluginVersion *left = [PluginVersion versionFromString:a error:NULL];
+                PluginVersion *right = [PluginVersion versionFromString:b error:NULL];
+                return [right compare:left];
+            }];
             [result addObject:@{
                 @"id": pluginId,
                 @"name": plugin.name,
@@ -181,6 +187,7 @@ extern "C" void RegisterRepoMethods(void) {
                 @"author": plugin.author,
                 @"icon": plugin.icon ?: [NSNull null],
                 @"channels": plugin.channels ?: @{},
+                @"order": order,
                 @"versions": versions,
             }];
         }
