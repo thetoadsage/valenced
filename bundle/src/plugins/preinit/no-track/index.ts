@@ -182,7 +182,12 @@ registerInternalPlugin(manifest, {
                 // Block analytics requests
                 instead(HTTPUtils.HTTP, 'post', (args, original) => {
                     const [{ url }] = args
-                    if (url === '/science') return Promise.resolve()
+                    if (
+                        url === '/science' ||
+                        url === '/metrics' ||
+                        url === '/metrics/v2'
+                    )
+                        return Promise.resolve()
 
                     return original.apply(this, args)
                 })

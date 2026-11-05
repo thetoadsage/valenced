@@ -4,7 +4,12 @@ import { waitForModules } from '@valenced/modules/finders'
 import { withName } from '@valenced/modules/finders/filters'
 import { callNativeMethod } from '@valenced/modules/native'
 import { instead } from '@valenced/patcher'
-import { isDefaultsOnlyBoot, registerInternalPlugin } from '@valenced/plugins/_'
+import {
+    isDefaultsOnlyBoot,
+    isPluginErrored,
+    pList,
+    registerInternalPlugin,
+} from '@valenced/plugins/_'
 import { onRunApplicationFinished } from '@valenced/react/native'
 import { asap } from '@valenced/utils/callback'
 import { getErrorStack } from '@valenced/utils/error'
@@ -15,18 +20,44 @@ import { cache as modulesCache } from '../../../../lib/modules/src/caches'
 import { mErrorChain } from '../../../../lib/modules/src/metro/runtime'
 import defer * as Alerts from './components/alerts'
 import defer * as ErrorBoundaryScreen from './components/ErrorBoundaryScreen'
+import defer * as StartupReady from './components/StartupReady'
+import {
+    logAlertKeys,
+    logNativeErrorAlerts,
+    logRenderErrors,
+} from './diagnostics'
 import manifest from './manifest.json'
+import type { PluginApi } from '@valenced/plugins/types'
 import type { Component, ReactNode } from 'react'
+
+let markStartupReady: () => void = () => {}
 
 registerInternalPlugin(manifest, {
     preInit({ cleanup }) {
-        cleanup(freezeDetectionService())
+        markStartupReady = freezeDetectionService()
+        cleanup(markStartupReady)
     },
-    start({ cleanup }) {
+    start({ cleanup, logger }) {
         // @as-require
         import('./settings')
 
-        cleanup(errorBoundaryService())
+        cleanup(
+            logNativeErrorAlerts(logger),
+            logAlertKeys(logger, Actions.AlertActionCreators),
+            errorBoundaryService(logger),
+        )
+        logger.log(
+            '[LOCAL_DIAGNOSTICS_V2] enabled',
+            FullVersion,
+            JSON.stringify({
+                recoveryMode: isDefaultsOnlyBoot,
+                assetsOutdated: assetsCache.outdated,
+                modulesOutdated: modulesCache.outdated,
+                erroredPlugins: [...pList.values()]
+                    .filter(isPluginErrored)
+                    .map(plugin => plugin.manifest.id),
+            }),
+        )
 
         asap(() => {
             if (isDefaultsOnlyBoot) {
@@ -122,11 +153,17 @@ function freezeDetectionService() {
     return clear
 }
 
-function errorBoundaryService() {
+function errorBoundaryService(logger: PluginApi['logger']) {
+    let unpatchDiagnostics: (() => void) | undefined
+    const onReady = () => {
+        markStartupReady()
+        logger.log('[LOCAL_DIAGNOSTICS_V2:STARTUP_READY] root committed')
+    }
     const unsub = waitForModules(
         withName<typeof DiscordErrorBoundary>('ErrorBoundary'),
         exports => {
             unsub()
+            unpatchDiagnostics = logRenderErrors(logger, exports.prototype)
 
             instead(
                 exports.prototype,
@@ -146,7 +183,11 @@ function errorBoundaryService() {
                             />
                         )
 
-                    return this.props.children
+                    return (
+                        <StartupReady.default onReady={onReady}>
+                            {this.props.children}
+                        </StartupReady.default>
+                    )
                 },
             )
         },
@@ -155,7 +196,10 @@ function errorBoundaryService() {
         },
     )
 
-    return unsub
+    return () => {
+        unsub()
+        unpatchDiagnostics?.()
+    }
 }
 
 declare class DiscordErrorBoundary extends Component<
@@ -168,5 +212,9 @@ declare class DiscordErrorBoundary extends Component<
     // render() is always called with `this` as the instance of DiscordErrorBoundary
     render(this: DiscordErrorBoundary): ReactNode
     discordErrorsSet: boolean
+    componentDidCatch(
+        error: unknown,
+        info?: { componentStack?: string | null },
+    ): void
     handleReload(): void
 }
