@@ -121,7 +121,9 @@ def verify_core(data):
     return len([s for s in defined if s.startswith('_ValencedCore_')])
 
 
-def verify(source, output):
+def verify(source, output, package):
+    from ios_package import shipped_files
+
     before, after = inspect(source), inspect(output)
     root = after['root']
     require(not after['encrypted_extensions'], 'Output still contains encrypted extensions')
@@ -129,11 +131,15 @@ def verify(source, output):
             before['discord_build'] == after['discord_build'], 'Discord version was modified')
     tweak = root + 'Frameworks/ValencedTweak.dylib'
     bundle = root + 'valenced.bundle'
+    manifest = root + 'valenced.manifest.json'
+    shipped = shipped_files(package)
     substrate = root + 'Frameworks/CydiaSubstrate.framework/CydiaSubstrate'
     with zipfile.ZipFile(source) as src, zipfile.ZipFile(output) as dst:
         require(tweak not in src.namelist(), 'Input was already modified with Valenced')
-        for name in (tweak, bundle, substrate):
+        for name in (tweak, bundle, manifest, substrate):
             require(name in dst.namelist(), 'Missing injected file: ' + name)
+        for name, data in shipped.items():
+            require(dst.read(root + name) == data, 'Injected file differs from DEB: ' + name)
         require('@rpath/ValencedTweak.dylib' in after['main']['dependencies'],
                 'Discord does not load ValencedTweak')
         require('@executable_path/Frameworks' in after['main']['rpaths'], 'Missing Frameworks rpath')
@@ -174,6 +180,7 @@ def verify(source, output):
                                  'kotlin_c_exports': core_exports,
                                  'original_files_preserved': preserved,
                                  'valenced_bundle_sha256': sha(dst.read(bundle)),
+                                 'valenced_manifest_sha256': sha(dst.read(manifest)),
                                  'tweak_sha256': sha(dst.read(tweak)),
                                  'hook_framework_sha256': sha(dst.read(substrate)),
                                  'removed_encrypted_extensions': before['encrypted_extensions']}
@@ -184,9 +191,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('input', type=Path)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--package', type=Path)
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
-    result = verify(args.input, args.output) if args.output else inspect(args.input)
+    if args.output and not args.package:
+        parser.error('--output requires --package to verify bundle and manifest pairing')
+    result = verify(args.input, args.output, args.package) if args.output else inspect(args.input)
     args.report.write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps({k: v for k, v in result.items() if k != 'images'}, indent=2))
 

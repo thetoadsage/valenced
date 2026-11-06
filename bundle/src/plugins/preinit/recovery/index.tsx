@@ -85,6 +85,7 @@ function freezeDetectionService() {
 
     let sub: { remove(): void } | undefined
     let unsubFlux: (() => void) | undefined
+    let unsubPermission: (() => void) | undefined
 
     const setTimer = () => {
         onRunApplicationFinished(() => {
@@ -129,12 +130,14 @@ function freezeDetectionService() {
 
         sub?.remove()
         unsubFlux?.()
+        unsubPermission?.()
 
         return e
     }
 
     unsubFlux = onFluxEventDispatched('APP_STATE_UPDATE', clear)
-    // clear() may have run before unsubStore/unsubFlux was assigned, so run it again to unsub
+    unsubPermission = onFluxEventDispatched('SET_NATIVE_PERMISSION', clear)
+    // Clean up subscriptions assigned after synchronous readiness callbacks.
     if (cleared) {
         clear()
         return clear

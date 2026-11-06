@@ -117,6 +117,9 @@ jobs:
         with:
           deno-version-file: bundle/.dvmrc
 
+      - name: Test IPA packaging helpers
+        run: python3 -m unittest discover -s scripts -p 'test_ios_package.py'
+
       - name: Build packages
         run: ./gradlew :ios:packageTweak
 
@@ -221,12 +224,13 @@ jobs:
           # assets/.cache translations. Archive its app output without exclusions.
           mkdir -p injected/Payload
           cyan -g --overwrite -i discord.ipa -o injected/Payload/Discord.app -f "${{ env.ROOTLESS_DEB_FILE_NAME }}"
+          python3 scripts/ios_package.py "${{ env.ROOTLESS_DEB_FILE_NAME }}" injected/Payload/Discord.app
           cd injected
           zip -qr "$GITHUB_WORKSPACE/${{ env.APP_NAME }}.ipa" Payload
 
       - name: Verify injection and original Discord files
         run: |
-          python3 scripts/verify-ios.py discord.ipa --output "${{ env.APP_NAME }}.ipa" --report verification.json
+          python3 scripts/verify-ios.py discord.ipa --output "${{ env.APP_NAME }}.ipa" --package "${{ env.ROOTLESS_DEB_FILE_NAME }}" --report verification.json
           shasum -a 256 "${{ env.APP_NAME }}.ipa" > SHA256SUMS
 
       - name: Upload ipa as artifact
