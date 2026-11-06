@@ -4,6 +4,7 @@ import argparse
 import io
 import json
 from pathlib import Path, PurePosixPath
+import plistlib
 import subprocess
 import tarfile
 
@@ -28,11 +29,25 @@ def shipped_files(package):
     return result
 
 
+def file_sharing_info(info):
+    return {**info, 'UIFileSharingEnabled': True,
+            'LSSupportsOpeningDocumentsInPlace': True}
+
+
+def enable_file_sharing(app):
+    path = app / 'Info.plist'
+    original = path.read_bytes()
+    info = file_sharing_info(plistlib.loads(original))
+    fmt = plistlib.FMT_BINARY if original.startswith(b'bplist00') else plistlib.FMT_XML
+    path.write_bytes(plistlib.dumps(info, fmt=fmt, sort_keys=False))
+
+
 def copy_manifest(package, app):
     files = shipped_files(package)
     if (app / 'valenced.bundle').read_bytes() != files['valenced.bundle']:
         raise ValueError('Injected bundle does not match the manifest package')
     (app / 'valenced.manifest.json').write_bytes(files['valenced.manifest.json'])
+    enable_file_sharing(app)
 
 
 if __name__ == '__main__':

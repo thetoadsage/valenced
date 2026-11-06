@@ -1,11 +1,12 @@
 import io
 import json
 from pathlib import Path
+import plistlib
 import tarfile
 import tempfile
 import unittest
 
-from ios_package import copy_manifest, shipped_files
+from ios_package import copy_manifest, enable_file_sharing, shipped_files
 
 
 class PackageTests(unittest.TestCase):
@@ -15,6 +16,9 @@ class PackageTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.app = self.root / 'Discord.app'
         self.app.mkdir()
+        self.info = {'CFBundleIdentifier': 'com.hammerandchisel.discord',
+                     'CFBundleVersion': '120481', 'UnrelatedSetting': {'keep': [1, 'value']}}
+        (self.app / 'Info.plist').write_bytes(plistlib.dumps(self.info, fmt=plistlib.FMT_BINARY))
         self.bundle = b'paired bytecode'
         self.manifest = json.dumps({'format': 1, 'version': '1.3.0',
                                     'plugins': [{'id': 'valenced.recovery'}]}).encode()
@@ -45,6 +49,26 @@ class PackageTests(unittest.TestCase):
         (self.app / 'valenced.bundle').write_bytes(self.bundle)
         copy_manifest(self.package(), self.app)
         self.assertEqual((self.app / 'valenced.manifest.json').read_bytes(), self.manifest)
+        self.assertEqual(plistlib.loads((self.app / 'Info.plist').read_bytes()),
+                         {**self.info, 'UIFileSharingEnabled': True,
+                          'LSSupportsOpeningDocumentsInPlace': True})
+
+    def test_enables_files_flags_without_other_plist_changes(self):
+        for fmt in (plistlib.FMT_BINARY, plistlib.FMT_XML):
+            with self.subTest(format=fmt):
+                original = {**self.info, 'UIFileSharingEnabled': False,
+                            'LSSupportsOpeningDocumentsInPlace': False}
+                path = self.app / 'Info.plist'
+                path.write_bytes(plistlib.dumps(original, fmt=fmt))
+                enable_file_sharing(self.app)
+                first = path.read_bytes()
+                info = plistlib.loads(first)
+                self.assertIs(info.pop('UIFileSharingEnabled'), True)
+                self.assertIs(info.pop('LSSupportsOpeningDocumentsInPlace'), True)
+                self.assertEqual(info, self.info)
+                self.assertEqual(first.startswith(b'bplist00'), fmt == plistlib.FMT_BINARY)
+                enable_file_sharing(self.app)
+                self.assertEqual(path.read_bytes(), first)
 
     def test_rejects_stale_injected_bundle(self):
         (self.app / 'valenced.bundle').write_bytes(b'stale')

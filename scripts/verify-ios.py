@@ -122,7 +122,7 @@ def verify_core(data):
 
 
 def verify(source, output, package):
-    from ios_package import shipped_files
+    from ios_package import file_sharing_info, shipped_files
 
     before, after = inspect(source), inspect(output)
     root = after['root']
@@ -136,6 +136,13 @@ def verify(source, output, package):
     substrate = root + 'Frameworks/CydiaSubstrate.framework/CydiaSubstrate'
     with zipfile.ZipFile(source) as src, zipfile.ZipFile(output) as dst:
         require(tweak not in src.namelist(), 'Input was already modified with Valenced')
+        original_info = plistlib.loads(src.read(before['root'] + 'Info.plist'))
+        output_info = plistlib.loads(dst.read(root + 'Info.plist'))
+        require(output_info == file_sharing_info(original_info),
+                'Info.plist must preserve all values except enabling Files access')
+        require(output_info.get('UIFileSharingEnabled') is True and
+                output_info.get('LSSupportsOpeningDocumentsInPlace') is True,
+                'Files access flags must be Boolean true')
         for name in (tweak, bundle, manifest, substrate):
             require(name in dst.namelist(), 'Missing injected file: ' + name)
         for name, data in shipped.items():
@@ -161,14 +168,14 @@ def verify(source, output, package):
         missing = sorted(jsi - available)
         require(not missing, 'Discord does not export required JSI symbols: ' + repr(missing))
         # All original resources and frameworks survive byte-for-byte. Only the app
-        # executable/signature and encrypted extension directories may change.
+        # executable/signature, the two verified Files flags, and encrypted extension directories may change.
         removed_roots = {n.split('.appex/')[0] + '.appex/' for n in before['encrypted_extensions']}
         preserved = 0
         for name in src.namelist():
             if name.endswith('/') or not name.startswith(before['root']):
                 continue
             relative = name[len(before['root']):]
-            if name == before['executable'] or '/_CodeSignature/' in name or relative == 'embedded.mobileprovision':
+            if name == before['executable'] or '/_CodeSignature/' in name or relative in ('embedded.mobileprovision', 'Info.plist'):
                 continue
             if any(name.startswith(prefix) for prefix in removed_roots):
                 continue
@@ -176,7 +183,7 @@ def verify(source, output, package):
             require(target in dst.namelist(), 'Original file removed: ' + relative)
             require(sha(src.read(name)) == sha(dst.read(target)), 'Original file changed: ' + relative)
             preserved += 1
-        after['verification'] = {'on_device_tested': False, 'jsi_imports_resolved': len(jsi),
+        after['verification'] = {'on_device_tested': False, 'files_app_access_enabled': True, 'jsi_imports_resolved': len(jsi),
                                  'kotlin_c_exports': core_exports,
                                  'original_files_preserved': preserved,
                                  'valenced_bundle_sha256': sha(dst.read(bundle)),
