@@ -117,8 +117,8 @@ jobs:
         with:
           deno-version-file: bundle/.dvmrc
 
-      - name: Test IPA packaging helpers
-        run: python3 -m unittest discover -s scripts -p 'test_ios_package.py'
+      - name: Test iOS native and packaging helpers
+        run: python3 -m unittest discover -s scripts -p 'test_ios_*.py'
 
       - name: Build packages
         run: ./gradlew :ios:packageTweak

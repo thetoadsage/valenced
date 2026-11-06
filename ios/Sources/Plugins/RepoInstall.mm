@@ -221,9 +221,10 @@ static NSURL *ApplyStagedPlugin(PluginLoader *loader, NSString *stagedPath, NSSt
         if (error) *error = @"Staged plugin directory is missing";
         return nil;
     }
-    NSURL *dest = [loader applyStagedDirectory:[NSURL fileURLWithPath:stagedPath] forPluginId:pluginId];
+    NSError *applyError = nil;
+    NSURL *dest = [loader applyStagedDirectory:[NSURL fileURLWithPath:stagedPath] forPluginId:pluginId error:&applyError];
     if (!dest) {
-        if (error) *error = @"Failed to apply staged plugin";
+        if (error) *error = applyError.localizedDescription ?: @"Failed to apply staged plugin";
         return nil;
     }
     return dest;

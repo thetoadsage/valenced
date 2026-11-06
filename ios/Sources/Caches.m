@@ -47,48 +47,46 @@ static NSDictionary *ModulesCacheLoadFromFileOrNull(NSURL *file) {
     NSData *data = [NSData dataWithContentsOfFile:file.path];
     if (!data) return nil;
 
-    void (^discard)(NSString *) = ^(NSString *reason) {
-        ValencedLog(@"Modules cache corrupt: %@", reason);
-        [fm removeItemAtPath:file.path error:nil];
-    };
+    @try {
+        NSUInteger offset = 0;
+        const int version = DataInputReadInt(data, &offset);
+        if (version != kModulesCacheVersion) {
+            ValencedLog(@"Modules cache version mismatch: expected %d, but got version: %d", kModulesCacheVersion, version);
+            [fm removeItemAtPath:file.path error:nil];
+            return nil;
+        }
 
-    NSUInteger offset = 0;
-    const int version = DataInputReadInt(data, &offset);
-    if (version != kModulesCacheVersion) {
-        ValencedLog(@"Modules cache version mismatch: expected %d, but got version: %d", kModulesCacheVersion, version);
+        int blacklistSize = DataInputReadCount(data, &offset, 4);
+        NSMutableArray<NSNumber *> *blacklist = [NSMutableArray arrayWithCapacity:(NSUInteger)blacklistSize];
+        for (int i = 0; i < blacklistSize; i++) {
+            [blacklist addObject:@(DataInputReadInt(data, &offset))];
+        }
+
+        int findsSize = DataInputReadCount(data, &offset, 3);
+        NSMutableDictionary<NSString *, id> *finds = [NSMutableDictionary dictionary];
+        for (int i = 0; i < findsSize; i++) {
+            NSString *filter = DataInputReadUTF(data, &offset);
+            BOOL hasMatches = DataInputReadBoolean(data, &offset);
+            if (!hasMatches) {
+                finds[filter] = [NSNull null];
+                continue;
+            }
+            int mapSize = DataInputReadCount(data, &offset, 8);
+            NSMutableDictionary<NSString *, NSNumber *> *matches = [NSMutableDictionary dictionary];
+            for (int j = 0; j < mapSize; j++) {
+                int id = DataInputReadInt(data, &offset);
+                int flag = DataInputReadInt(data, &offset);
+                matches[[NSString stringWithFormat:@"%d", id]] = @(flag);
+            }
+            finds[filter] = matches;
+        }
+        if (offset != data.length) [NSException raise:NSInvalidArgumentException format:@"Trailing cache data"];
+        return ModulesCacheToMap(blacklist, finds);
+    } @catch (NSException *exception) {
+        ValencedLog(@"Modules cache corrupt: %@", exception.reason);
         [fm removeItemAtPath:file.path error:nil];
         return nil;
     }
-
-    int blacklistSize = DataInputReadInt(data, &offset);
-    NSMutableArray<NSNumber *> *blacklist = [NSMutableArray arrayWithCapacity:blacklistSize < 0 ? 0 : (NSUInteger)blacklistSize];
-    for (int i = 0; i < blacklistSize; i++) {
-        [blacklist addObject:@(DataInputReadInt(data, &offset))];
-    }
-
-    int findsSize = DataInputReadInt(data, &offset);
-    NSMutableDictionary<NSString *, id> *finds = [NSMutableDictionary dictionary];
-    for (int i = 0; i < findsSize; i++) {
-        NSString *filter = DataInputReadUTF(data, &offset);
-        BOOL hasMatches = DataInputReadBoolean(data, &offset);
-        if (!hasMatches) {
-            finds[filter] = [NSNull null];
-            continue;
-        }
-        int mapSize = DataInputReadInt(data, &offset);
-        NSMutableDictionary<NSString *, NSNumber *> *matches = [NSMutableDictionary dictionary];
-        for (int j = 0; j < mapSize; j++) {
-            int id = DataInputReadInt(data, &offset);
-            int flag = DataInputReadInt(data, &offset);
-            matches[[NSString stringWithFormat:@"%d", id]] = @(flag);
-        }
-        finds[filter] = matches;
-    }
-    if (offset > data.length) {
-        discard(@"unexpected end of file");
-        return nil;
-    }
-    return ModulesCacheToMap(blacklist, finds);
 }
 
 static NSDictionary *AssetsCacheToMap(NSDictionary<NSString *, NSDictionary *> *data) {
@@ -120,33 +118,35 @@ static NSDictionary *AssetsCacheLoadFromFileOrNull(NSURL *file) {
     NSData *data = [NSData dataWithContentsOfFile:file.path];
     if (!data) return nil;
 
-    NSUInteger offset = 0;
-    const int version = DataInputReadInt(data, &offset);
-    if (version != kAssetsCacheVersion) {
-        ValencedLog(@"Assets cache version mismatch: expected %d, but got version: %d", kAssetsCacheVersion, version);
-        [fm removeItemAtPath:file.path error:nil];
-        return nil;
-    }
-
-    int dataSize = DataInputReadInt(data, &offset);
-    NSMutableDictionary<NSString *, NSDictionary *> *parsed = [NSMutableDictionary dictionary];
-    for (int i = 0; i < dataSize; i++) {
-        NSString *name = DataInputReadUTF(data, &offset);
-        int mappingsSize = DataInputReadInt(data, &offset);
-        NSMutableDictionary<NSString *, NSNumber *> *mappings = [NSMutableDictionary dictionary];
-        for (int j = 0; j < mappingsSize; j++) {
-            NSString *type = DataInputReadUTF(data, &offset);
-            double id = DataInputReadInt(data, &offset);
-            mappings[type] = @(id);
+    @try {
+        NSUInteger offset = 0;
+        const int version = DataInputReadInt(data, &offset);
+        if (version != kAssetsCacheVersion) {
+            ValencedLog(@"Assets cache version mismatch: expected %d, but got version: %d", kAssetsCacheVersion, version);
+            [fm removeItemAtPath:file.path error:nil];
+            return nil;
         }
-        parsed[name] = mappings;
-    }
-    if (offset > data.length) {
-        ValencedLog(@"Assets cache corrupt: unexpected end of file");
+
+        int dataSize = DataInputReadCount(data, &offset, 6);
+        NSMutableDictionary<NSString *, NSDictionary *> *parsed = [NSMutableDictionary dictionary];
+        for (int i = 0; i < dataSize; i++) {
+            NSString *name = DataInputReadUTF(data, &offset);
+            int mappingsSize = DataInputReadCount(data, &offset, 6);
+            NSMutableDictionary<NSString *, NSNumber *> *mappings = [NSMutableDictionary dictionary];
+            for (int j = 0; j < mappingsSize; j++) {
+                NSString *type = DataInputReadUTF(data, &offset);
+                double id = DataInputReadInt(data, &offset);
+                mappings[type] = @(id);
+            }
+            parsed[name] = mappings;
+        }
+        if (offset != data.length) [NSException raise:NSInvalidArgumentException format:@"Trailing cache data"];
+        return AssetsCacheToMap(parsed);
+    } @catch (NSException *exception) {
+        ValencedLog(@"Assets cache corrupt: %@", exception.reason);
         [fm removeItemAtPath:file.path error:nil];
         return nil;
     }
-    return AssetsCacheToMap(parsed);
 }
 
 void RegisterCachesMethods(void) {

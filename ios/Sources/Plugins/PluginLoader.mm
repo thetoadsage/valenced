@@ -16,6 +16,8 @@ static id ParseJSONObjectOrEmpty(NSString *json) {
 }
 
 #include <dlfcn.h>
+#include <stdio.h>
+#include <errno.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <UIKit/UIKit.h>
 #include <objc/message.h>
@@ -29,7 +31,7 @@ static id ParseJSONObjectOrEmpty(NSString *json) {
 - (void)storePendingInstall:(NSString *)token record:(PluginRecord *)record;
 - (PluginRecord *)pendingInstallForToken:(NSString *)token;
 - (void)discardPendingInstalls;
-- (NSString *)confirmPendingInstall:(NSString *)token accepted:(BOOL)accepted;
+- (NSString *)confirmPendingInstall:(NSString *)token accepted:(BOOL)accepted error:(NSError **)error;
 @end
 
 static NSString * const kManifestFile = @"manifest.json";
@@ -1161,16 +1163,18 @@ NSString *PluginErrorCodeString(PluginErrorCode code) {
     return record;
 }
 
-- (nullable NSURL *)applyStagedDirectory:(NSURL *)stagedDir forPluginId:(NSString *)pluginId {
+- (nullable NSURL *)applyStagedDirectory:(NSURL *)stagedDir forPluginId:(NSString *)pluginId error:(NSError **)error {
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSURL *dist = [self pluginsDirectory];
-    NSURL *dest = [dist URLByAppendingPathComponent:pluginId];
+    NSURL *dest = [[self pluginsDirectory] URLByAppendingPathComponent:pluginId];
+    BOOL replacing = [fm fileExistsAtPath:dest.path];
 
-    [fm removeItemAtURL:dest error:nil];
-    if (![fm moveItemAtURL:stagedDir toURL:dest error:nil]) {
-        [fm copyItemAtURL:stagedDir toURL:dest error:nil];
-        [fm removeItemAtURL:stagedDir error:nil];
+    // Both directories stay intact if the atomic replacement fails.
+    if (renamex_np(stagedDir.fileSystemRepresentation, dest.fileSystemRepresentation,
+                   replacing ? RENAME_SWAP : RENAME_EXCL) != 0) {
+        if (error) *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil];
+        return nil;
     }
+    if (replacing) [fm removeItemAtURL:stagedDir error:nil];
     return dest;
 }
 
@@ -1279,7 +1283,7 @@ static NSMutableDictionary<NSString *, PluginRecord *> *pendingInstalls(void) {
     [pendingInstalls() removeAllObjects];
 }
 
-- (NSString *)confirmPendingInstall:(NSString *)token accepted:(BOOL)accepted {
+- (NSString *)confirmPendingInstall:(NSString *)token accepted:(BOOL)accepted error:(NSError **)error {
     PluginRecord *staged = pendingInstalls()[token];
     [pendingInstalls() removeObjectForKey:token];
     if (!staged || !accepted) {
@@ -1289,8 +1293,11 @@ static NSMutableDictionary<NSString *, PluginRecord *> *pendingInstalls(void) {
 
     BOOL isUpdate = _records[staged.manifest.id] != nil || _pendingUpdates[staged.manifest.id] != nil;
     NSURL *dir = [self applyStagedDirectory:[NSURL fileURLWithPath:staged.bundlePath]
-                                forPluginId:staged.manifest.id];
-    if (!dir) return @"cancelled";
+                                forPluginId:staged.manifest.id error:error];
+    if (!dir) {
+        [[NSFileManager defaultManager] removeItemAtPath:staged.bundlePath error:nil];
+        return nil;
+    }
 
     if (isUpdate) {
         [self setPendingUpdate:staged.manifest.id version:staged.manifest.version.stringValue];
@@ -1456,7 +1463,12 @@ NSDictionary *ListUpdatesForRepo(NSString *url, PluginVersion * (^installedVersi
         NSString *token = argString(args, 0, nil);
         BOOL accepted = argBool(args, 1, NO);
         if (!token) return @{@"error": @"Expected an install token"};
-        NSString *result = [weakLoader confirmPendingInstall:token accepted:accepted];
+        NSError *error = nil;
+        NSString *result = [weakLoader confirmPendingInstall:token accepted:accepted error:&error];
+        if (!result) return @{@"error": @{
+            @"code": @"INSTALL_FAILED",
+            @"message": error.localizedDescription ?: @"Failed to apply staged plugin",
+        }};
         return @{@"result": result ?: @"cancelled"};
     };
 

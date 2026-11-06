@@ -308,30 +308,44 @@ void DataOutputWriteUTF(NSMutableData *data, NSString *value) {
     [data appendData:encoded];
 }
 
+static void DataInputRequire(NSData *data, NSUInteger offset, NSUInteger length) {
+    if (offset > data.length || length > data.length - offset)
+        [NSException raise:NSRangeException format:@"Unexpected end of cache file"];
+}
+
 NSData *DataInputSlice(NSData *data, NSUInteger *offset) {
+    DataInputRequire(data, *offset, 0);
     return [data subdataWithRange:NSMakeRange(*offset, data.length - *offset)];
 }
 
 int DataInputReadInt(NSData *data, NSUInteger *offset) {
-    if (data.length < *offset + 4) return 0;
+    DataInputRequire(data, *offset, 4);
     const uint8_t *bytes = (const uint8_t *)data.bytes + *offset;
     *offset += 4;
     return (int)(((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) | ((uint32_t)bytes[2] << 8) | (uint32_t)bytes[3]);
 }
 
+int DataInputReadCount(NSData *data, NSUInteger *offset, NSUInteger minimumEntrySize) {
+    int count = DataInputReadInt(data, offset);
+    if (count < 0 || minimumEntrySize == 0 || (NSUInteger)count > (data.length - *offset) / minimumEntrySize)
+        [NSException raise:NSRangeException format:@"Invalid cache entry count"];
+    return count;
+}
+
 BOOL DataInputReadBoolean(NSData *data, NSUInteger *offset) {
-    if (data.length < *offset + 1) return NO;
+    DataInputRequire(data, *offset, 1);
     const uint8_t *bytes = (const uint8_t *)data.bytes + *offset;
     *offset += 1;
+    if (bytes[0] > 1) [NSException raise:NSInvalidArgumentException format:@"Invalid cache boolean"];
     return bytes[0] != 0;
 }
 
 NSString *DataInputReadUTF(NSData *data, NSUInteger *offset) {
-    if (data.length < *offset + 2) return @"";
+    DataInputRequire(data, *offset, 2);
     const uint8_t *lenBytes = (const uint8_t *)data.bytes + *offset;
     NSUInteger length = ((NSUInteger)lenBytes[0] << 8) | lenBytes[1];
     *offset += 2;
-    if (data.length < *offset + length) return @"";
+    DataInputRequire(data, *offset, length);
     NSData *encoded = [data subdataWithRange:NSMakeRange(*offset, length)];
     *offset += length;
     NSMutableData *std = [NSMutableData dataWithData:encoded];
@@ -346,5 +360,7 @@ NSString *DataInputReadUTF(NSData *data, NSUInteger *offset) {
             i += 1;
         }
     }
-    return [[NSString alloc] initWithData:std encoding:NSUTF8StringEncoding] ?: @"";
+    NSString *value = [[NSString alloc] initWithData:std encoding:NSUTF8StringEncoding];
+    if (!value) [NSException raise:NSInvalidArgumentException format:@"Invalid cache string"];
+    return value;
 }

@@ -120,7 +120,7 @@ NSString *PluginErrorCodeString(PluginErrorCode code);
                                           tmpName:(NSString *)tmpName
                                             error:(PluginErrorInfo * _Nullable * _Nullable)error;
 
-- (nullable NSURL *)applyStagedDirectory:(NSURL *)stagedDir forPluginId:(NSString *)pluginId;
+- (nullable NSURL *)applyStagedDirectory:(NSURL *)stagedDir forPluginId:(NSString *)pluginId error:(NSError * _Nullable * _Nullable)error;
 
 - (void)setPendingUpdate:(NSString *)pluginId version:(NSString *)version;
 - (nullable NSString *)pendingUpdateForPlugin:(NSString *)pluginId;

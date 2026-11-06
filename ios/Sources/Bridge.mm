@@ -11,7 +11,8 @@ using namespace facebook;
 
 static NSMutableDictionary<NSString *, BridgeHandler> *gBridgeHandlers = nil;
 static jsi::Runtime *gJsiRuntime = nullptr;
-static id gJsiInstance = nil;
+static __weak id gJsiInstance = nil;
+static const char *kPendingBridgeCalls = "__VALENCED_BRIDGE_PENDING__";
 
 NSString * const EVENT_DOWNLOAD_PROGRESS = @"valenced.plugins.events.downloadProgress";
 NSString * const EVENT_PLUGIN_INSTALL_READY = @"valenced.plugins.events.pluginInstallFileReady";
@@ -75,8 +76,7 @@ static jsi::Value callJSFunctionOnRuntime(jsi::Runtime &runtime, NSString *event
     return jsi::Value::undefined();
 }
 
-static void dispatchOnJsThread(void (^block)(jsi::Runtime &runtime)) {
-    id instance = gJsiInstance;
+static void dispatchOnJsThread(id instance, void (^block)(jsi::Runtime &runtime)) {
     if (instance && [instance respondsToSelector:@selector(callFunctionOnBufferedRuntimeExecutor:)]) {
         std::function<void(jsi::Runtime &)> executor = [block](jsi::Runtime &rt) {
             try {
@@ -110,7 +110,7 @@ void EmitJSEventArgs(NSString *eventName, NSArray *args) {
         return;
     }
 
-    dispatchOnJsThread(^(jsi::Runtime &runtime) {
+    dispatchOnJsThread(gJsiInstance, ^(jsi::Runtime &runtime) {
         callJSFunctionOnRuntime(runtime, eventName, args);
     });
 }
@@ -169,30 +169,46 @@ void RegisterBridgeMethods(void) {
 }
 
 NSDictionary *callBridgeMethodHelper(NSString *methodName, NSArray *args) {
-    BOOL pluginSystem = [methodName hasPrefix:@"valenced.plugins."];
-    @try {
-        BridgeHandler handler = bridgeHandlers()[methodName];
-        if (!handler) {
-            id error = pluginSystem
-                ? @{@"error": @{@"code": @"UNKNOWN", @"message": [NSString stringWithFormat:@"Method not implemented: %@", methodName]}}
-                : @{@"error": [NSString stringWithFormat:@"Method not implemented: %@", methodName]};
-            return pluginSystem ? @{@"result": error} : error;
+    // Event acknowledgements must not wait behind the operation emitting them.
+    if ([methodName isEqualToString:@"valenced.__callableReturn"]) return @{@"result": [NSNull null]};
+
+    __block NSDictionary *result;
+    dispatchSyncFs(^{
+        BOOL pluginSystem = [methodName hasPrefix:@"valenced.plugins."];
+        @try {
+            BridgeHandler handler = bridgeHandlers()[methodName];
+            if (!handler) {
+                id error = pluginSystem
+                    ? @{@"error": @{@"code": @"UNKNOWN", @"message": [NSString stringWithFormat:@"Method not implemented: %@", methodName]}}
+                    : @{@"error": [NSString stringWithFormat:@"Method not implemented: %@", methodName]};
+                result = pluginSystem ? @{@"result": error} : error;
+                return;
+            }
+
+            NSDictionary *value = handler(args);
+            result = pluginSystem ? @{@"result": (id)value ?: [NSNull null]} : value;
         }
+        @catch (NSException *exception) {
+            id error = pluginSystem
+                ? @{@"error": @{@"code": @"UNKNOWN", @"message": exception.reason ?: @"Unknown Objective-C exception"}}
+                : @{@"error": exception.reason ?: @"Unknown Objective-C exception"};
+            result = pluginSystem ? @{@"result": error} : error;
+        }
+    });
+    return result;
+}
 
-        __block NSDictionary *result;
-        dispatchSyncFs(^{
-            result = handler(args);
-        });
-
-        if (pluginSystem) return @{@"result": (id)result ?: [NSNull null]};
-        return result;
-    }
-    @catch (NSException *exception) {
-        id error = pluginSystem
-            ? @{@"error": @{@"code": @"UNKNOWN", @"message": exception.reason ?: @"Unknown Objective-C exception"}}
-            : @{@"error": exception.reason ?: @"Unknown Objective-C exception"};
-        return pluginSystem ? @{@"result": error} : error;
-    }
+static void callBridgeMethodAsync(id instance, NSString *methodName, NSArray *args,
+                                  void (^completion)(jsi::Runtime &, NSDictionary *)) {
+    __weak id weakInstance = instance;
+    dispatch_async(fsQueue(), ^{
+        @autoreleasepool {
+            NSDictionary *result = callBridgeMethodHelper(methodName, args);
+            dispatchOnJsThread(weakInstance, ^(jsi::Runtime &runtime) {
+                completion(runtime, result);
+            });
+        }
+    });
 }
 
 void injectPreBundle(jsi::Runtime &runtime) {
@@ -240,11 +256,15 @@ void injectPreBundle(jsi::Runtime &runtime) {
             reflectSet.call(runtime, static_cast<const jsi::Value *>(setArgs), static_cast<size_t>(3));
         }
 
+        // Keep JS handles in their runtime; background work captures only an opaque ID.
+        auto pending = runtime.global().getPropertyAsFunction(runtime, "Map").callAsConstructor(runtime);
+        runtime.global().setProperty(runtime, kPendingBridgeCalls, std::move(pending));
+        __weak id instance = gJsiInstance;
         auto asyncCall = jsi::Function::createFromHostFunction(
             runtime,
             jsi::PropNameID::forUtf8(runtime, "valencedBridgeCallAsync"),
             1,
-            [](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
+            [instance](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args, size_t count) -> jsi::Value {
                 NSString *methodName = @"";
                 NSArray *objcArgs = @[];
                 if (count >= 1 && args[0].isObject()) {
@@ -261,10 +281,28 @@ void injectPreBundle(jsi::Runtime &runtime) {
                 }
                 jsi::Function promiseCtor = rt.global().getPropertyAsFunction(rt, "Promise");
                 jsi::Function executor = jsi::Function::createFromHostFunction(rt, jsi::PropNameID::forUtf8(rt, "executor"), 2,
-                    [methodName, objcArgs](jsi::Runtime &innerRt, const jsi::Value &, const jsi::Value *innerArgs, size_t innerCount) -> jsi::Value {
-                        jsi::Function resolve = innerArgs[0].asObject(innerRt).asFunction(innerRt);
-                        NSDictionary *res = callBridgeMethodHelper(methodName, objcArgs);
-                        resolve.call(innerRt, [JSI fromObjC:res runtime:innerRt]);
+                    [instance, methodName, objcArgs](jsi::Runtime &innerRt, const jsi::Value &, const jsi::Value *innerArgs, size_t innerCount) -> jsi::Value {
+                        id owner = instance;
+                        if (!owner || ![owner respondsToSelector:@selector(callFunctionOnBufferedRuntimeExecutor:)])
+                            throw jsi::JSError(innerRt, "No JS runtime executor available");
+
+                        NSString *requestId = [NSUUID UUID].UUIDString;
+                        auto callbacks = innerRt.global().getPropertyAsObject(innerRt, kPendingBridgeCalls);
+                        callbacks.getPropertyAsFunction(innerRt, "set").callWithThis(innerRt, callbacks,
+                            jsi::String::createFromUtf8(innerRt, requestId.UTF8String), innerArgs[0]);
+                        callBridgeMethodAsync(owner, methodName, objcArgs, ^(jsi::Runtime &completionRt, NSDictionary *result) {
+                            auto pendingValue = completionRt.global().getProperty(completionRt, kPendingBridgeCalls);
+                            if (!pendingValue.isObject()) return;
+                            auto callbacks = pendingValue.asObject(completionRt);
+                            auto key = jsi::String::createFromUtf8(completionRt, requestId.UTF8String);
+                            auto resolve = callbacks.getPropertyAsFunction(completionRt, "get")
+                                .callWithThis(completionRt, callbacks, key);
+                            // A replacement runtime has no entry for this request.
+                            if (!resolve.isObject() || !resolve.asObject(completionRt).isFunction(completionRt)) return;
+                            callbacks.getPropertyAsFunction(completionRt, "delete").callWithThis(completionRt, callbacks, key);
+                            resolve.asObject(completionRt).asFunction(completionRt)
+                                .call(completionRt, [JSI fromObjC:result runtime:completionRt]);
+                        });
                         return jsi::Value::undefined();
                     });
                 return promiseCtor.callAsConstructor(rt, executor);

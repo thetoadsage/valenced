@@ -1,6 +1,7 @@
 #import "Themes.h"
 #import "Bridge.h"
 #import "Logger.h"
+#import "Plugins/PluginStates.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -216,11 +217,28 @@ void RegisterThemesBridgeMethods(void) {
     };
 }
 
+static BOOL themePluginEnabled(PluginsStates *states, NSString *pluginId) {
+    return ![states hasPlugin:pluginId] || [states isPluginEnabled:pluginId];
+}
+
 void ThemesApplyAtBoot(void) {
+    PluginStatesStore *store = [PluginStatesStore sharedStore];
+    PluginsStates *states = [store ensureLoaded];
+    if (store.defaultsOnly || !themePluginEnabled(states, @"valenced.api.themes")) return;
+
     VTHThemesState *state = [[VTHStateStore sharedStore] load];
-    if (state.colors) [[VTHColorApplier sharedApplier] apply:state.colors];
-    if (state.fonts) [[VTHFontApplier sharedApplier] apply:state.fonts];
-    if (state.emoji) [[VTHEmojiApplier sharedApplier] apply:state.emoji];
+    if (state.colors && themePluginEnabled(states, state.colors.plugin))
+        [[VTHColorApplier sharedApplier] apply:state.colors];
+    if (state.fonts) {
+        NSMutableDictionary *sources = [NSMutableDictionary dictionary];
+        for (NSString *family in state.fonts.sources) {
+            VTHFontSource *source = state.fonts.sources[family];
+            if (themePluginEnabled(states, source.plugin)) sources[family] = source;
+        }
+        if (sources.count) [[VTHFontApplier sharedApplier] apply:[[VTHFontsSelection alloc] initWithSources:sources]];
+    }
+    if (state.emoji && themePluginEnabled(states, state.emoji.plugin))
+        [[VTHEmojiApplier sharedApplier] apply:state.emoji];
 }
 
 NS_ASSUME_NONNULL_END

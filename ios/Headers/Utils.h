@@ -23,6 +23,7 @@ void DataOutputWriteBoolean(NSMutableData *data, BOOL value);
 void DataOutputWriteUTF(NSMutableData *data, NSString *value);
 NSData *DataInputSlice(NSData *data, NSUInteger *offset);
 int DataInputReadInt(NSData *data, NSUInteger *offset);
+int DataInputReadCount(NSData *data, NSUInteger *offset, NSUInteger minimumEntrySize);
 BOOL DataInputReadBoolean(NSData *data, NSUInteger *offset);
 NSString *DataInputReadUTF(NSData *data, NSUInteger *offset);
 
