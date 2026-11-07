@@ -105,6 +105,7 @@ export function getAssetsByName(
  *
  * Unless **explicitly** calling with a preferred type,
  * another asset with type mismatching the {@link setPreferredAssetType current preferred type} may be returned as a fallback.
+ * SVG is excluded from fallback on iOS.
  *
  * @param name The asset name.
  * @param type The preferred asset type, defaults to the current preferred type.
@@ -116,15 +117,23 @@ export function getAssetIdByName(
     const reg = cache.data[name]
     if (!reg) return
 
-    if (type !== undefined) {
-        const mid = reg[type]
-        return mid && metroRequire(mid)
+    if (type === undefined) {
+        type =
+            reg[_preferredType] !== undefined
+                ? _preferredType
+                : Object.keys(reg).find(
+                      candidate => Platform.OS !== 'ios' || candidate !== 'svg',
+                  )
     }
 
-    let mid = reg[_preferredType]
-    mid ??= Object.values(reg)[0]
+    const mid = type === undefined ? undefined : reg[type]
+    if (mid === undefined) return
 
-    return mid && metroRequire(mid)
+    const id = metroRequire(mid)
+    if (typeof id !== 'number') return
+
+    const asset = AssetsRegistry.getAssetByID(id)
+    if (asset?.name === name && asset.type === type) return id
 }
 
 /**
