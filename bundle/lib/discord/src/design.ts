@@ -32,23 +32,26 @@ export let Design: Design = proxify(
     () => {
         // ID: 13171
         // [3909, 4608, 5182, 13172, 2, ...] (141 dependencies)
-        const [module] = lookupModule(
-            withProps('TableRow', 'Button')
-                .and(
-                    withDependencies<Design>(
-                        atLeast(DesignMinimumDependencies, [
-                            [ImportTrackerModuleId],
-                            [ImportTrackerModuleId],
-                            last([ImportTrackerModuleId]),
-                            [ImportTrackerModuleId],
-                            ImportTrackerModuleId,
-                        ]),
-                    ),
-                )
-                .keyAs('valenced.discord.design.Design'),
-        )
+        const filter = withProps<Design>('TableRow', 'Button', 'createStyles')
+            .and(
+                withDependencies<Design>(
+                    atLeast(DesignMinimumDependencies, [
+                        [ImportTrackerModuleId],
+                        [ImportTrackerModuleId],
+                        last([ImportTrackerModuleId]),
+                        [ImportTrackerModuleId],
+                        ImportTrackerModuleId,
+                    ]),
+                ),
+            )
+            .keyAs('valenced.discord.design.Design')
 
-        if (module) return (Design = module)
+        const [cached] = lookupModule(filter)
+        if (typeof cached?.createStyles === 'function') return (Design = cached)
+
+        // Cached matches bypass the filter, so retry against the live modules.
+        const [fresh] = lookupModule(filter, { cached: false })
+        if (typeof fresh?.createStyles === 'function') return (Design = fresh)
     },
     {
         hint: {},
