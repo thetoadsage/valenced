@@ -30,22 +30,15 @@ const DesignMinimumDependencies = 128
 // design/native.tsx
 export let Design: Design = proxify(
     () => {
-        // ID: 13171
-        // [3909, 4608, 5182, 13172, 2, ...] (141 dependencies)
         const [module] = lookupModule(
-            withProps('TableRow', 'Button')
-                .and(
-                    withDependencies<Design>(
-                        atLeast(DesignMinimumDependencies, [
-                            [ImportTrackerModuleId],
-                            [ImportTrackerModuleId],
-                            last([ImportTrackerModuleId]),
-                            [ImportTrackerModuleId],
-                            ImportTrackerModuleId,
-                        ]),
-                    ),
-                )
-                .keyAs('valenced.discord.design.Design'),
+            withProps(
+                'TableRow',
+                'Button',
+                'AlertModal',
+                'AlertActionButton',
+                'Text',
+                'createStyles',
+            ).and(withDependencies<Design>(atLeast(DesignMinimumDependencies))),
         )
 
         if (module) return (Design = module)
