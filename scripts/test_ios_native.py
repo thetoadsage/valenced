@@ -24,6 +24,7 @@ class IOSNativeTests(unittest.TestCase):
         sources = {
             'utils.inc': section('ios/Sources/Utils.m', 'NSMutableData *DataOutputBuffer'),
             'caches.inc': section('ios/Sources/Caches.m', 'static const int', 'void RegisterCachesMethods'),
+            'cache-identity.inc': section('ios/Sources/Caches.m', 'static NSString *hostBundleDigest', 'static const int'),
             'install.inc': section('ios/Sources/Plugins/PluginLoader.mm', '- (nullable NSURL *)applyStagedDirectory:', '- (void)installFromFile:'),
             'themes-header.inc': (ROOT / 'ios/Headers/Themes.h').read_text().replace('#import <UIKit/UIKit.h>', ''),
             'themes-state.inc': section('ios/Sources/Themes/ThemesState.mm', 'NS_ASSUME_NONNULL_BEGIN'),
@@ -56,6 +57,9 @@ class IOSNativeTests(unittest.TestCase):
 
     def test_cache_round_trip(self):
         self.run_case('foundation', 'cache-round-trip')
+
+    def test_cache_identity(self):
+        self.run_case('foundation', 'cache-identity')
 
     def test_truncated_caches(self):
         self.run_case('foundation', 'cache-truncated')

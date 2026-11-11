@@ -5,6 +5,7 @@ import {
     withProps,
 } from '@valenced/modules/finders/filters'
 import { getModuleDependencies } from '@valenced/modules/metro/utils'
+import { before } from '@valenced/patcher'
 import {
     ReactJSXRuntimeModuleId,
     ReactModuleId,
@@ -173,6 +174,23 @@ export let [ToastActionCreators, ToastActionCreatorsModuleId]: [
                     ? module.open.length === 1
                     : true
             ) {
+                const toast = module as { open: (...args: unknown[]) => void }
+                before(toast, 'open', args => {
+                    const [key, options] = args
+                    if (
+                        key === 'VALENCED_THEMES_GUIDE' &&
+                        typeof options === 'object' &&
+                        options !== null &&
+                        'text' in options &&
+                        typeof options.text !== 'string'
+                    ) {
+                        args[1] = {
+                            ...options,
+                            text: 'You can now access Settings > Valenced > Themes',
+                        }
+                    }
+                    return args
+                })
                 ToastActionCreators = module
                 ToastActionCreatorsModuleId = id
                 return [module, id]

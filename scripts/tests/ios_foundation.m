@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import <CommonCrypto/CommonDigest.h>
 #include <stdio.h>
 #include <errno.h>
 #import "Plugins/PluginStates.h"
@@ -6,6 +7,13 @@
 
 #include "utils.inc"
 #include "caches.inc"
+
+static NSMutableDictionary *bridgeHandlers(void) {
+    static NSMutableDictionary *handlers;
+    if (!handlers) handlers = [NSMutableDictionary new];
+    return handlers;
+}
+#include "cache-identity.inc"
 
 static BOOL failRename;
 static int testRename(const char *from, const char *to, unsigned int flags) {
@@ -200,11 +208,27 @@ static void themeDisabled(void) {
     NSCAssert(appliedFonts.sources.count == 1 && appliedFonts.sources[@"enabled"], @"font provider filtering failed");
     NSCAssert([savedTheme() isEqual:saved], @"disabled providers erased saved theme");
 }
+static void cacheIdentity(void) {
+    NSCAssert(!CacheFile(testRoot, @"modules", @"122208"), @"unknown bundle used disk cache");
+    NSData *source = [@"abc" dataUsingEncoding:NSUTF8StringEncoding];
+    SetHostBundleCacheSource(source);
+    NSURL *modules = CacheFile(testRoot, @"modules", @"122208");
+    NSCAssert([modules.lastPathComponent isEqual:@"modules.122208.ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"],
+              @"wrong module cache identity");
+    NSCAssert(![modules isEqual:CacheFile(testRoot, @"assets", @"122208")], @"module and asset paths collide");
+    SetHostBundleCacheSource([source copy]);
+    NSCAssert([modules isEqual:CacheFile(testRoot, @"modules", @"122208")], @"same bundle changed cache identity");
+    SetHostBundleCacheSource([@"OTA" dataUsingEncoding:NSUTF8StringEncoding]);
+    NSCAssert(!CacheFile(testRoot, @"modules", @"122208"), @"changed bundle reused module cache");
+    NSCAssert(!CacheFile(testRoot, @"assets", @"122208"), @"changed bundle reused asset cache");
+}
+
 int main(int argc, const char **argv) { @autoreleasepool {
     testRoot = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
     [NSFileManager.defaultManager createDirectoryAtURL:testRoot withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *name = argc > 1 ? @(argv[1]) : @"";
     if ([name isEqual:@"cache-round-trip"]) cacheRoundTrip();
+    else if ([name isEqual:@"cache-identity"]) cacheIdentity();
     else if ([name isEqual:@"cache-truncated"]) cacheTruncated();
     else if ([name isEqual:@"cache-invalid"]) cacheInvalid();
     else if ([name isEqual:@"install-success"]) installSuccess();

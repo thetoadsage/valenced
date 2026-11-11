@@ -2,6 +2,40 @@
 #import "Constants.h"
 #import "Utils.h"
 #import "Logger.h"
+#import <CommonCrypto/CommonDigest.h>
+
+static NSString *hostBundleDigest;
+static BOOL hostBundleSeen;
+
+void SetHostBundleCacheSource(NSData *data) {
+    NSString *digest = nil;
+    if (data.length > 0 && data.length <= UINT32_MAX) {
+        unsigned char bytes[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(data.bytes, (CC_LONG)data.length, bytes);
+        char hex[CC_SHA256_DIGEST_LENGTH * 2 + 1];
+        for (NSUInteger i = 0; i < sizeof(bytes); i++)
+            snprintf(hex + i * 2, 3, "%02x", (unsigned int)bytes[i]);
+        digest = [NSString stringWithUTF8String:hex];
+    }
+
+    @synchronized (bridgeHandlers()) {
+        if (!hostBundleSeen) {
+            hostBundleSeen = YES;
+            hostBundleDigest = digest;
+        } else if (![hostBundleDigest isEqualToString:digest]) {
+            // A queued write from the previous runtime must never reach another bundle's cache.
+            hostBundleDigest = nil;
+        }
+    }
+}
+
+static NSURL *CacheFile(NSURL *directory, NSString *kind, NSString *version) {
+    @synchronized (bridgeHandlers()) {
+        if (!hostBundleDigest) return nil;
+        NSString *name = [NSString stringWithFormat:@"%@.%@.%@", kind, version, hostBundleDigest];
+        return [directory URLByAppendingPathComponent:name];
+    }
+}
 
 static const int kModulesCacheVersion = 3;
 static const int kAssetsCacheVersion = 2;
@@ -155,16 +189,10 @@ void RegisterCachesMethods(void) {
     NSURL *valencedCacheDir = [getValencedDirectory() URLByAppendingPathComponent:CACHE_DIR];
     [[NSFileManager defaultManager] createDirectoryAtURL:valencedCacheDir
                              withIntermediateDirectories:YES attributes:nil error:nil];
-    NSURL *modulesCacheFile = [valencedCacheDir URLByAppendingPathComponent:[NSString stringWithFormat:@"modules.%@", versionTag]];
-    NSURL *assetsCacheFile = [valencedCacheDir URLByAppendingPathComponent:[NSString stringWithFormat:@"assets.%@", versionTag]];
-    ValencedLog(@"modules cache at: %@, assets cache at: %@", modulesCacheFile.lastPathComponent, assetsCacheFile.lastPathComponent);
-
-    __block NSDictionary *modulesCache = nil;
-    __block NSDictionary *assetsCache = nil;
-
     bridgeHandlers()[@"valenced.caches.modules.read"] = ^NSDictionary *(NSArray *args) {
-        if (!modulesCache) modulesCache = ModulesCacheLoadFromFileOrNull(modulesCacheFile);
-        return @{@"result": modulesCache ?: [NSNull null]};
+        NSURL *file = CacheFile(valencedCacheDir, @"modules", versionTag);
+        NSDictionary *cache = file ? ModulesCacheLoadFromFileOrNull(file) : nil;
+        return @{@"result": cache ?: [NSNull null]};
     };
 
     bridgeHandlers()[@"valenced.caches.modules.write"] = ^NSDictionary *(NSArray *args) {
@@ -173,7 +201,8 @@ void RegisterCachesMethods(void) {
         if (![blacklist isKindOfClass:[NSArray class]]) return @{@"error": @"Expected a blacklist argument"};
         if (![finds isKindOfClass:[NSDictionary class]]) return @{@"error": @"Expected a finds argument"};
 
-        modulesCache = ModulesCacheToMap(blacklist, finds);
+        NSURL *modulesCacheFile = CacheFile(valencedCacheDir, @"modules", versionTag);
+        if (!modulesCacheFile) return @{@"result": [NSNull null]};
         ModulesCacheSaveToFile(modulesCacheFile, blacklist, finds);
         ValencedLog(@"Modules cache saved: %@ (blacklisted: %lu, finds: %lu)",
                     modulesCacheFile.path, (unsigned long)blacklist.count, (unsigned long)finds.count);
@@ -181,15 +210,17 @@ void RegisterCachesMethods(void) {
     };
 
     bridgeHandlers()[@"valenced.caches.assets.read"] = ^NSDictionary *(NSArray *args) {
-        if (!assetsCache) assetsCache = AssetsCacheLoadFromFileOrNull(assetsCacheFile);
-        return @{@"result": assetsCache ?: [NSNull null]};
+        NSURL *file = CacheFile(valencedCacheDir, @"assets", versionTag);
+        NSDictionary *cache = file ? AssetsCacheLoadFromFileOrNull(file) : nil;
+        return @{@"result": cache ?: [NSNull null]};
     };
 
     bridgeHandlers()[@"valenced.caches.assets.write"] = ^NSDictionary *(NSArray *args) {
         NSDictionary *data = args.firstObject;
         if (![data isKindOfClass:[NSDictionary class]]) return @{@"error": @"Expected a data argument"};
 
-        assetsCache = AssetsCacheToMap(data);
+        NSURL *assetsCacheFile = CacheFile(valencedCacheDir, @"assets", versionTag);
+        if (!assetsCacheFile) return @{@"result": [NSNull null]};
         AssetsCacheSaveToFile(assetsCacheFile, data);
         ValencedLog(@"Assets cache saved: %@ (count: %lu)", assetsCacheFile.path, (unsigned long)data.count);
         return @{@"result": [NSNull null]};

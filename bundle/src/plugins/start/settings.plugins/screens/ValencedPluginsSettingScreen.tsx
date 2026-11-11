@@ -167,7 +167,7 @@ function BrowseFloatingActionButton({
     )
 }
 
-const ShieldIcon = getAssetByName('ShieldIcon')!
+const ShieldIcon = getAssetByName('ShieldIcon')
 const RecoveryBannerTitleVariant = 'text-md/semibold'
 
 const useRecoveryBannerStyles = Design.createStyles({
@@ -175,7 +175,7 @@ const useRecoveryBannerStyles = Design.createStyles({
         tintColor: Tokens.default.colors.TEXT_DEFAULT,
         height: Design.TextStyleSheet[RecoveryBannerTitleVariant].lineHeight,
         width: undefined,
-        aspectRatio: (ShieldIcon.width ?? 1) / (ShieldIcon.height ?? 1),
+        aspectRatio: (ShieldIcon?.width ?? 1) / (ShieldIcon?.height ?? 1),
     },
 })
 
@@ -186,11 +186,13 @@ function RecoveryModeBanner() {
         <Card style={{ marginHorizontal: 6, marginVertical: 6, boxShadow: '' }}>
             <Stack spacing={12}>
                 <Stack direction="horizontal" spacing={8} align="center">
-                    <Image
-                        source={ShieldIcon.id}
-                        resizeMode="contain"
-                        style={styles.icon}
-                    />
+                    {ShieldIcon && (
+                        <Image
+                            source={ShieldIcon.id}
+                            resizeMode="contain"
+                            style={styles.icon}
+                        />
+                    )}
                     <Text variant={RecoveryBannerTitleVariant}>
                         Recovery Mode
                     </Text>
@@ -216,14 +218,14 @@ function RecoveryModeBanner() {
     )
 }
 
-const RetryIcon = getAssetByName('RetryIcon')!
+const RetryIcon = getAssetByName('RetryIcon')
 
 const usePendingReloadBannerStyles = Design.createStyles({
     icon: {
         tintColor: Tokens.default.colors.TEXT_DEFAULT,
         height: Design.TextStyleSheet[RecoveryBannerTitleVariant].lineHeight,
         width: undefined,
-        aspectRatio: (RetryIcon.width ?? 1) / (RetryIcon.height ?? 1),
+        aspectRatio: (RetryIcon?.width ?? 1) / (RetryIcon?.height ?? 1),
     },
 })
 
@@ -242,11 +244,13 @@ function PendingReloadBanner() {
         <Card style={{ marginHorizontal: 6, marginVertical: 6, boxShadow: '' }}>
             <Stack spacing={12}>
                 <Stack direction="horizontal" spacing={8} align="center">
-                    <Image
-                        source={RetryIcon.id}
-                        resizeMode="contain"
-                        style={styles.icon}
-                    />
+                    {RetryIcon && (
+                        <Image
+                            source={RetryIcon.id}
+                            resizeMode="contain"
+                            style={styles.icon}
+                        />
+                    )}
                     <Text variant={RecoveryBannerTitleVariant}>
                         Reload to apply changes
                     </Text>
@@ -255,7 +259,7 @@ function PendingReloadBanner() {
                     {parts.join(' and ')} will apply after a reload.
                 </Text>
                 <Design.Button
-                    icon={RetryIcon.id}
+                    icon={RetryIcon?.id}
                     size="sm"
                     text="Reload now"
                     onPress={() => {

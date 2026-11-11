@@ -10,6 +10,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 static const int VTHDefaultFontWeight = 400;
+static NSString *const VTHSystemUIFont = @"system-ui";
 
 @interface VTHFontApplier ()
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSArray<NSString *> *> *postScriptsByName;
@@ -18,10 +19,12 @@ static const int VTHDefaultFontWeight = 400;
 @property (nonatomic, assign) IMP fontWithDescriptorOriginal;
 - (void)installHooks;
 - (void)installHooksOnce;
-- (UIFont *)fontWithPostScript:(NSString *)postScript cascade:(nullable NSArray *)cascade size:(CGFloat)size;
+- (UIFont *)fontWithPostScript:(NSString *)postScript name:(NSString *)name weight:(int)weight
+                        italic:(BOOL)italic cascade:(nullable NSArray *)cascade size:(CGFloat)size;
 @end
 
 static NSString *_Nullable VTHRegisterFontFile(NSString *path) {
+    if ([path isEqualToString:VTHSystemUIFont]) return VTHSystemUIFont;
     if (path.length == 0 || ![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
 
     NSData *data = [NSData dataWithContentsOfFile:path];
@@ -102,8 +105,34 @@ static NSUInteger VTHClosestVariantIndex(NSArray<VTHFontVariant *> *variants, in
 
 #pragma mark - Application
 
-- (UIFont *)fontWithPostScript:(NSString *)postScript cascade:(nullable NSArray *)cascade size:(CGFloat)size {
-    UIFontDescriptor *replacement = [UIFontDescriptor fontDescriptorWithName:postScript size:size];
+static UIFontWeight VTHSystemWeight(NSString *name, int weight) {
+    NSString *style = [name componentsSeparatedByString:@"-"].lastObject;
+    if ([style hasSuffix:@"Italic"]) style = [style substringToIndex:style.length - @"Italic".length];
+    if ([style isEqualToString:@"Medium"]) return UIFontWeightMedium;
+    if ([style isEqualToString:@"Semibold"]) return UIFontWeightSemibold;
+    if ([style isEqualToString:@"Bold"]) return UIFontWeightBold;
+    if ([style isEqualToString:@"ExtraBold"]) return UIFontWeightHeavy;
+    if (weight >= 800) return UIFontWeightHeavy;
+    if (weight >= 700) return UIFontWeightBold;
+    if (weight >= 600) return UIFontWeightSemibold;
+    if (weight >= 500) return UIFontWeightMedium;
+    if (weight <= 300) return UIFontWeightLight;
+    return UIFontWeightRegular;
+}
+
+- (UIFont *)fontWithPostScript:(NSString *)postScript name:(NSString *)name weight:(int)weight
+                        italic:(BOOL)italic cascade:(nullable NSArray *)cascade size:(CGFloat)size {
+    UIFontDescriptor *replacement;
+    if ([postScript isEqualToString:VTHSystemUIFont]) {
+        UIFont *font = [UIFont systemFontOfSize:size weight:VTHSystemWeight(name, weight)];
+        replacement = font.fontDescriptor;
+        if (italic || [name hasSuffix:@"Italic"]) {
+            replacement = [replacement fontDescriptorWithSymbolicTraits:
+                replacement.symbolicTraits | UIFontDescriptorTraitItalic] ?: replacement;
+        }
+    } else {
+        replacement = [UIFontDescriptor fontDescriptorWithName:postScript size:size];
+    }
     if (!cascade.count) return ((UIFont * (*)(id, SEL, UIFontDescriptor *, CGFloat))self.fontWithDescriptorOriginal)([UIFont class], @selector(fontWithDescriptor:size:), replacement, size);
 
     UIFontDescriptor *final = [replacement fontDescriptorByAddingAttributes:@{
@@ -177,7 +206,8 @@ static NSUInteger VTHClosestVariantIndex(NSArray<VTHFontVariant *> *variants, in
         NSString *postScript = [applier postScriptForName:name weight:VTHDefaultFontWeight italic:NO];
         if (postScript) {
             NSArray *cascade = @[ [UIFontDescriptor fontDescriptorWithName:name size:size] ];
-            return [applier fontWithPostScript:postScript cascade:cascade size:size];
+            return [applier fontWithPostScript:postScript name:name weight:VTHDefaultFontWeight
+                                       italic:NO cascade:cascade size:size];
         }
         return ((UIFont * (*)(id, SEL, NSString *, CGFloat))nameOriginal)(self, nameSel, name, size);
     });
@@ -198,13 +228,17 @@ static NSUInteger VTHClosestVariantIndex(NSArray<VTHFontVariant *> *variants, in
         if ([slant isKindOfClass:[NSNumber class]]) italic = slant.doubleValue > 0;
 
         VTHFontApplier *applier = [VTHFontApplier sharedApplier];
-        NSString *postScript = [applier postScriptForName:descriptor.postscriptName weight:weight italic:italic];
+        NSString *name = descriptor.postscriptName;
+        NSString *postScript = [applier postScriptForName:name weight:weight italic:italic];
         if (!postScript) {
             id family = descriptor.fontAttributes[UIFontDescriptorNameAttribute];
-            if ([family isKindOfClass:[NSString class]])
-                postScript = [applier postScriptForName:family weight:weight italic:italic];
+            if ([family isKindOfClass:[NSString class]]) {
+                name = family;
+                postScript = [applier postScriptForName:name weight:weight italic:italic];
+            }
         }
-        if (postScript) return [applier fontWithPostScript:postScript cascade:@[ descriptor ] size:size];
+        if (postScript) return [applier fontWithPostScript:postScript name:name weight:weight
+                                                   italic:italic cascade:@[ descriptor ] size:size];
         return ((UIFont * (*)(id, SEL, UIFontDescriptor *, CGFloat))descOriginal)(self, descSel, descriptor, size);
     });
     method_setImplementation(descMethod, descReplacement);
@@ -215,7 +249,9 @@ static NSUInteger VTHClosestVariantIndex(NSArray<VTHFontVariant *> *variants, in
     IMP systemReplacement = imp_implementationWithBlock(^UIFont *(id self, CGFloat size) {
         VTHFontApplier *applier = [VTHFontApplier sharedApplier];
         NSString *postScript = [applier postScriptForName:@"systemFont" weight:VTHDefaultFontWeight italic:NO];
-        if (postScript) return [applier fontWithPostScript:postScript cascade:nil size:size];
+        if (postScript && ![postScript isEqualToString:VTHSystemUIFont])
+            return [applier fontWithPostScript:postScript name:@"systemFont"
+                                                    weight:VTHDefaultFontWeight italic:NO cascade:nil size:size];
         return ((UIFont * (*)(id, SEL, CGFloat))systemOriginal)(self, systemSel, size);
     });
     method_setImplementation(systemMethod, systemReplacement);
@@ -226,7 +262,9 @@ static NSUInteger VTHClosestVariantIndex(NSArray<VTHFontVariant *> *variants, in
     IMP preferredReplacement = imp_implementationWithBlock(^UIFont *(id self, UIFontTextStyle style) {
         VTHFontApplier *applier = [VTHFontApplier sharedApplier];
         NSString *postScript = [applier postScriptForName:@"systemFont" weight:VTHDefaultFontWeight italic:NO];
-        if (postScript) return [applier fontWithPostScript:postScript cascade:nil size:[UIFont systemFontSize]];
+        if (postScript && ![postScript isEqualToString:VTHSystemUIFont])
+            return [applier fontWithPostScript:postScript name:@"systemFont"
+                                                    weight:VTHDefaultFontWeight italic:NO cascade:nil size:[UIFont systemFontSize]];
         return ((UIFont * (*)(id, SEL, UIFontTextStyle))preferredOriginal)(self, preferredSel, style);
     });
     method_setImplementation(preferredMethod, preferredReplacement);
