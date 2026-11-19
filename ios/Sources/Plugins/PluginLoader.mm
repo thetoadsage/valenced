@@ -348,6 +348,10 @@ NSString *PluginErrorCodeString(PluginErrorCode code) {
     return _records;
 }
 
+- (PluginRecord *)installedRecordForPlugin:(NSString *)pluginId {
+    return _records[pluginId] ?: _failureRecords[pluginId];
+}
+
 - (BOOL)isReservedPluginId:(NSString *)pluginId {
     return isReservedPluginId(pluginId);
 }
@@ -1291,7 +1295,7 @@ static NSMutableDictionary<NSString *, PluginRecord *> *pendingInstalls(void) {
         return @"cancelled";
     }
 
-    BOOL isUpdate = _records[staged.manifest.id] != nil || _pendingUpdates[staged.manifest.id] != nil;
+    BOOL isUpdate = [self installedRecordForPlugin:staged.manifest.id] != nil || _pendingUpdates[staged.manifest.id] != nil;
     NSURL *dir = [self applyStagedDirectory:[NSURL fileURLWithPath:staged.bundlePath]
                                 forPluginId:staged.manifest.id error:error];
     if (!dir) {
@@ -1483,8 +1487,7 @@ NSDictionary *ListUpdatesForRepo(NSString *url, PluginVersion * (^installedVersi
 
         NSMutableDictionary *installed = [NSMutableDictionary dictionary];
         NSMutableDictionary *installedDeps = [NSMutableDictionary dictionary];
-        for (NSString *recordKey in [weakLoader records].allKeys) {
-            PluginRecord *record = [weakLoader records][recordKey];
+        for (PluginRecord *record in [weakLoader listableRecords]) {
             if (record.manifest && record.manifest.version) {
                 installed[record.manifest.id] = record.manifest.version.stringValue;
             }
@@ -1515,7 +1518,7 @@ NSDictionary *ListUpdatesForRepo(NSString *url, PluginVersion * (^installedVersi
         id plan = argPresent(args, 0);
         if (![plan isKindOfClass:[NSDictionary class]]) return @{@"error": @"Expected an install plan"};
         NSDictionary *result = ExecuteInstallPlan(plan, ^BOOL(NSString *pluginId) {
-            return [weakLoader records][pluginId] != nil;
+            return [weakLoader installedRecordForPlugin:pluginId] != nil;
         }, ^BOOL(NSString *pluginId) {
             PluginRecord *record = [weakLoader records][pluginId];
             return [record isPendingReload] || [weakLoader pendingUpdateForPlugin:pluginId] != nil;
@@ -1534,7 +1537,7 @@ NSDictionary *ListUpdatesForRepo(NSString *url, PluginVersion * (^installedVersi
             return @{@"error": @"Expected a plugin ID and boolean"};
         }
 
-        PluginRecord *record = [weakLoader records][pluginId];
+        PluginRecord *record = [weakLoader installedRecordForPlugin:pluginId];
         if (!record) return @{@"error": [NSString stringWithFormat:@"Unknown plugin: '%@'", pluginId]};
         if (record.isInternal && !SourcesStoreAll()[pluginId]) {
             return @{@"error": [NSString stringWithFormat:@"Plugin %@ is internal and updates with Valenced itself", pluginId]};
@@ -1550,9 +1553,8 @@ NSDictionary *ListUpdatesForRepo(NSString *url, PluginVersion * (^installedVersi
         NSMutableDictionary *installed = [NSMutableDictionary dictionary];
         NSMutableDictionary *pending = [NSMutableDictionary dictionary];
         NSMutableDictionary *installedDeps = [NSMutableDictionary dictionary];
-        NSDictionary *allRecords = [weakLoader records];
-        for (NSString *recordKey in allRecords.allKeys) {
-            PluginRecord *record = allRecords[recordKey];
+        // Startup failures stay installed and must be eligible for updates.
+        for (PluginRecord *record in [weakLoader listableRecords]) {
             if (record.manifest && record.manifest.version) {
                 installed[record.manifest.id] = record.manifest.version.stringValue;
             }

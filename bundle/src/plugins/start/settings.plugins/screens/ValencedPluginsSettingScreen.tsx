@@ -168,12 +168,16 @@ function BrowseFloatingActionButton({
 }
 
 const ShieldIcon = getAssetByName('ShieldIcon')
-const RecoveryBannerTitleVariant = 'text-md/semibold'
+const textStyles = Design.TextStyleSheet
+const BannerTitleVariant = textStyles['text-md/semibold']
+    ? 'text-md/semibold'
+    : 'body-md/semibold'
+const BannerTitleLineHeight = textStyles[BannerTitleVariant]?.lineHeight ?? 20
 
 const useRecoveryBannerStyles = Design.createStyles({
     icon: {
         tintColor: Tokens.default.colors.TEXT_DEFAULT,
-        height: Design.TextStyleSheet[RecoveryBannerTitleVariant].lineHeight,
+        height: BannerTitleLineHeight,
         width: undefined,
         aspectRatio: (ShieldIcon?.width ?? 1) / (ShieldIcon?.height ?? 1),
     },
@@ -193,9 +197,7 @@ function RecoveryModeBanner() {
                             style={styles.icon}
                         />
                     )}
-                    <Text variant={RecoveryBannerTitleVariant}>
-                        Recovery Mode
-                    </Text>
+                    <Text variant={BannerTitleVariant}>Recovery Mode</Text>
                 </Stack>
                 <Text variant="text-sm/medium">
                     You are now running with default plugins. Additional plugins
@@ -223,7 +225,7 @@ const RetryIcon = getAssetByName('RetryIcon')
 const usePendingReloadBannerStyles = Design.createStyles({
     icon: {
         tintColor: Tokens.default.colors.TEXT_DEFAULT,
-        height: Design.TextStyleSheet[RecoveryBannerTitleVariant].lineHeight,
+        height: BannerTitleLineHeight,
         width: undefined,
         aspectRatio: (RetryIcon?.width ?? 1) / (RetryIcon?.height ?? 1),
     },
@@ -251,7 +253,7 @@ function PendingReloadBanner() {
                             style={styles.icon}
                         />
                     )}
-                    <Text variant={RecoveryBannerTitleVariant}>
+                    <Text variant={BannerTitleVariant}>
                         Reload to apply changes
                     </Text>
                 </Stack>

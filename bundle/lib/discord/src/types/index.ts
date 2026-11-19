@@ -284,6 +284,7 @@ export namespace DiscordModules {
             export type TextVariant =
                 | `heading-${BasicTextSizeWithExtraLarges}/${TextWeightWithExtraBold}`
                 | `text-${TextSize}/${TextWeight}`
+                | 'body-md/semibold'
                 | `display-${BasicTextSize}`
                 | `redesign/${RedesignTextCategory}/${TextWeight}`
                 | 'redesign/heading-18/bold'
